@@ -260,7 +260,8 @@ end
 
 function love.keypressed(key, scancode, isrepeat)
     imgui.KeyPressed(key)
-    
+
+
     -- Global shortcuts
     if key == "escape" then
         love.event.quit()

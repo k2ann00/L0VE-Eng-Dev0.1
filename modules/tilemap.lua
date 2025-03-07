@@ -18,6 +18,19 @@ local Tilemap = {
     mapScale = 1.0,
     lastMouseDown = false,
     entities = {},
+
+    -- Tile Selection State
+    selectedTile = nil,
+    hoveredTile = nil,
+
+    -- Mouse Interaction State
+    mouseState = {
+        isDown = false,
+        startPos = { x = nil, y = nil },
+        currentPos = { x = nil, y = nil }
+    },
+
+
     
     -- Debug mode
     debug = true,
@@ -28,8 +41,8 @@ local Tilemap = {
 function Tilemap:addDebug(message)
     if not self.debug then return end
     
-    Console:log("[TILEMAP DEBUG] " .. message)
-    table.insert(self.debugText, os.date("%H:%M:%S") .. ": " .. message)
+    Console:log("[TILEMAP DEBUG] " .. tostring(message))
+    table.insert(self.debugText, os.date("%H:%M:%S") .. ": " .. tostring(message))
     
     -- Keep only the last N messages
     while #self.debugText > self.maxDebugMessages do
@@ -41,50 +54,248 @@ function Tilemap:init()
     self.debug = true  -- Debug modunu aktifleştir
     State.showWindows.tilemap = false
     State.windowSizes.tilemap = {width = 800, height = 700}
-    self:addDebug("Tilemap module initialized")
     
-    -- Debug ve hata izleme için ekstra
-    love.window.setMode(love.graphics.getWidth(), love.graphics.getHeight(), {resizable = true})
+    -- Mouse tracking variables
+    self.mouseDownOnTile = nil
+    self.lastMouseDown = false
+    
+    self:addDebug("Tilemap module initialized")
 end
 
-
-function Tilemap:manualLoadTileset(imagePath, name, tileSize)
-    self:addDebug("Manual tileset loading attempt: " .. imagePath)
+-- Helper function to calculate tile coordinates
+function Tilemap:calculateTileCoordinates(mouseX, mouseY, previewScale)
+    -- Ensure active tileset exists
+    if not self.activeTileset then return nil end
     
-    local image
-    local success, errorMsg = pcall(function()
-        image = love.graphics.newImage(imagePath)
-    end)
+    -- Calculate relative mouse position within tileset preview
+    local tileSize = self.activeTileset.tileSize
+    local scaledTileSize = tileSize * previewScale
     
-    if not success or not image then
-        self:addDebug("FAILED to load image: " .. tostring(errorMsg))
+    local col = math.floor(mouseX / scaledTileSize)
+    local row = math.floor(mouseY / scaledTileSize)
+    
+    -- Validate coordinates
+    if col < 0 or col >= self.activeTileset.cols or 
+       row < 0 or row >= self.activeTileset.rows then
         return nil
     end
     
-    self:addDebug("Successfully loaded image: " .. tostring(image))
-    self:addDebug("Image dimensions: " .. image:getWidth() .. "x" .. image:getHeight())
+    -- Calculate tile ID
+    local tileId = row * self.activeTileset.cols + col + 1
     
-    local tileset = {
-        image = image,
-        name = name or imagePath:match("([^/\\]+)$"):gsub("%.%w+$", ""),
-        tileSize = tileSize or self.tileSize,
-        path = imagePath
+    return {
+        col = col,
+        row = row,
+        tileId = tileId
     }
+end
+
+-- Update mouse state and tracking
+function Tilemap:updateMouseState(mouseX, mouseY)
+    local currentState = love.mouse.isDown(1)
     
-    tileset.width = image:getWidth()
-    tileset.height = image:getHeight()
-    tileset.cols = math.floor(tileset.width / tileset.tileSize)
-    tileset.rows = math.floor(tileset.height / tileset.tileSize)
+    -- First frame of mouse press
+    if currentState and not self.mouseState.isDown then
+        self.mouseState.isDown = true
+        self.mouseState.startPos.x = mouseX
+        self.mouseState.startPos.y = mouseY
+    end
     
-    self:addDebug("Created tileset: " .. tileset.name)
-    self:addDebug("Dimensions: " .. tileset.width .. "x" .. tileset.height)
-    self:addDebug("Tiles: " .. tileset.cols .. "x" .. tileset.rows .. " at size " .. tileset.tileSize)
+    -- Update current position
+    if currentState then
+        self.mouseState.currentPos.x = mouseX
+        self.mouseState.currentPos.y = mouseY
+    end
     
+    -- Mouse release
+    if not currentState and self.mouseState.isDown then
+        self.mouseState.isDown = false
+        
+        -- Check if it was a click (minimal movement)
+        local dx = math.abs(mouseX - self.mouseState.startPos.x)
+        local dy = math.abs(mouseY - self.mouseState.startPos.y)
+        
+        -- Small movement threshold
+        local threshold = 5  -- pixels
+        if dx < threshold and dy < threshold then
+            return true  -- Legitimate click
+        end
+    end
+    
+    return false
+end
+
+-- Tile selection logic for tileset preview
+function Tilemap:handleTileSelection(mouseX, mouseY, previewScale)
+    -- Calculate tile coordinates
+    local tileInfo = self:calculateTileCoordinates(mouseX, mouseY, previewScale)
+    
+    if tileInfo then
+        -- Update hover state
+        self.hoveredTile = tileInfo
+        
+        -- Check for click
+        if self:updateMouseState(mouseX, mouseY) then
+            -- Select the tile
+            self.selectedTile = tileInfo.tileId
+            
+            -- Debug logging
+            if Console and Console.log then
+                Console:log(string.format(
+                    "Tile Selected: ID=%d, Col=%d, Row=%d", 
+                    tileInfo.tileId, 
+                    tileInfo.col, 
+                    tileInfo.row
+                ))
+            end
+        end
+    else
+        -- Reset hover when outside tileset bounds
+        self.hoveredTile = nil
+    end
+end
+
+-- Draw tile selection highlights
+function Tilemap:drawTileSelectionHighlights(cx, cy, previewScale)
+    if not self.activeTileset then return end
+    
+    local tileSize = self.activeTileset.tileSize
+    local scaledTileSize = tileSize * previewScale
+    
+    -- Hover highlight
+    if self.hoveredTile then
+        love.graphics.setColor(1, 1, 0, 0.3)
+        love.graphics.rectangle(
+            "fill",
+            cx + self.hoveredTile.col * scaledTileSize,
+            cy + self.hoveredTile.row * scaledTileSize,
+            scaledTileSize,
+            scaledTileSize
+        )
+        if love.mouse.isDown(1) then
+            --self.selectedTile = hoveredTile
+            print(self.selectedTile)
+        end
+    end
+    
+    -- Selected tile highlight
+    if self.selectedTile then
+        local tileInfo = self:calculateTileCoordinates(
+            (self.selectedTile - 1) % self.activeTileset.cols * scaledTileSize, 
+            math.floor((self.selectedTile - 1) / self.activeTileset.cols) * scaledTileSize, 
+            previewScale
+        )
+        
+        if tileInfo then
+            love.graphics.setColor(0, 1, 0, 0.5)
+            love.graphics.rectangle(
+                "fill",
+                cx + tileInfo.col * scaledTileSize,
+                cy + tileInfo.row * scaledTileSize,
+                scaledTileSize,
+                scaledTileSize
+            )
+            
+            -- Green border for selected tile
+            love.graphics.setColor(0, 1, 0, 1)
+            love.graphics.setLineWidth(2)
+            love.graphics.rectangle(
+                "line",
+                cx + tileInfo.col * scaledTileSize,
+                cy + tileInfo.row * scaledTileSize,
+                scaledTileSize,
+                scaledTileSize
+            )
+        end
+    end
+    
+    -- Reset color
+    love.graphics.setColor(1, 1, 1, 1)
+end
+
+
+-- Integration into existing Tilemap module
+function Tilemap:prepareTileSelection(mouseX, mouseY, cx, cy, previewScale)
+    -- Calculate relative mouse position
+    local relativeX = mouseX - cx
+    local relativeY = mouseY - cy
+    
+    -- Handle selection
+    self:handleTileSelection(relativeX, relativeY, previewScale)
+    
+    -- Draw highlights
+    self:drawTileSelectionHighlights(cx, cy, previewScale)
+end
+
+
+function Tilemap:manualLoadTileset(assetOrPath, name, tileSize)
+    local tileset
+    local defaultTileSize = tileSize or self.tileSize or 32
+    
+    -- Hata ayıklama için güvenli yükleme
+    local success, result = pcall(function()
+        local image, path, assetName
+        
+        -- Asset veya path kontrolü
+        if type(assetOrPath) == "table" and assetOrPath.type == "image" then
+            -- Asset objesi
+            image = assetOrPath.data
+            path = assetOrPath.path
+            assetName = assetOrPath.name
+        elseif type(assetOrPath) == "string" then
+            -- Dosya yolu
+            image = love.graphics.newImage(assetOrPath)
+            path = assetOrPath
+            assetName = path:match("([^/\\]+)$"):gsub("%.%w+$", "")
+        else
+            error("Invalid input: must be an asset or file path")
+        end
+        
+        -- Tileset oluştur
+        local tileset = {
+            image = image,
+            name = name or assetName or "Unnamed Tileset",
+            tileSize = defaultTileSize,
+            path = path
+        }
+        
+        -- Boyutları kontrol et
+        tileset.width = image:getWidth() or 0
+        tileset.height = image:getHeight() or 0
+        
+        -- Grid hesapla (minimum 1 olacak şekilde)
+        tileset.cols = math.max(1, math.floor(tileset.width / tileset.tileSize))
+        tileset.rows = math.max(1, math.floor(tileset.height / tileset.tileSize))
+        
+        return tileset
+    end)
+    
+    -- Hata kontrolü
+    if not success then
+        local errorMsg = tostring(result)
+        self:addDebug("Tileset yükleme hatası: " .. errorMsg)
+        Console:log("Tileset loading error: " .. errorMsg, "error")
+        return nil
+    end
+    
+    tileset = result
+    
+    -- Tilesetleri kaydet
     self.tilesets[tileset.name] = tileset
-    self.activeTileset = tileset
+    
+    -- İlk yüklenen tileset'i aktif olarak ayarla
+    if not self.activeTileset then
+        self.activeTileset = tileset
+    end
+    
+    self:addDebug(string.format("Tileset loaded: %s (%dx%d, %dx%d tiles at %dpx)", 
+        tileset.name, tileset.width, tileset.height, 
+        tileset.cols, tileset.rows, tileset.tileSize))
     
     return tileset
 end
+
+
 
 function Tilemap:loadAssetAsTileset(asset)
     if not asset then
@@ -449,6 +660,8 @@ function Tilemap:drawTilemapWindow()
         imgui.End()
     end
 
+    local currentMouseDown = love.mouse.isDown(1)
+
     if not State.showWindows.tilemap then return end
     
     -- Draw debug panel first
@@ -648,7 +861,6 @@ function Tilemap:drawTilemapWindow()
             mouseX, mouseY, cx, cy))
             self:addDebug(string.format("Relative: %d,%d", tilesetX, tilesetY))
 
-            
             -- Check if mouse is over the tileset
             if tilesetX >= 0 and tilesetX < self.activeTileset.width and
                tilesetY >= 0 and tilesetY < self.activeTileset.height then
@@ -659,14 +871,22 @@ function Tilemap:drawTilemapWindow()
                 
                  -- Geçerli sınırlar içinde mi kontrol et
                 if col >= 0 and col < self.activeTileset.cols and
-                row >= 0 and row < self.activeTileset.rows then
+                    row >= 0 and row < self.activeTileset.rows then
                 
                     -- Hover bilgisi ve vurgu
                     local hoveredTileId = row * self.activeTileset.cols + col + 1
                     
                     -- Debug için hover bilgisini göster
+                    -- FIXME: 
                     self:addDebug(string.format("Hovering tile: %d (col: %d, row: %d)", 
                         hoveredTileId, col, row))
+                        -- Detect first frame of mouse click
+                    if currentMouseDown and not self.lastMouseDown then
+                        print("Selected Calisti")
+                        self.selectedTile = hoveredTileId
+                        self:addDebug(string.format("Selected tile %d (col: %d, row: %d)", 
+                            hoveredTileId, col, row))
+                    end
                 end   
                     
                 -- Highlight hovered tile
@@ -683,12 +903,12 @@ function Tilemap:drawTilemapWindow()
                 local hoveredTileId = row * self.activeTileset.cols + col + 1
                 
                 -- Select tile on click
-                if love.mouse.isDown(1) and not self.lastMouseDown then
+               --[[  if love.mouse.isDown(1) and not self.lastMouseDown then
                     self.selectedTile = hoveredTileId
                     self:addDebug(string.format("Selected tile %d (col: %d, row: %d)", 
                         hoveredTileId, col, row))
                     self.lastMouseDown = true
-                end
+                end ]]
                 
                 -- Show hover info
                 love.graphics.setColor(1, 1, 1, 1)
@@ -762,6 +982,10 @@ function Tilemap:drawTilemapWindow()
             else
                 imgui.Text("No image assets available. Import some first.")
             end
+        end
+
+        if not love.mouse.isDown(1) then
+            self.lastMouseDown = false
         end
         
         imgui.EndChild()
