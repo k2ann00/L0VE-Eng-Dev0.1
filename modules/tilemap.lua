@@ -16,50 +16,137 @@ local Tilemap = {
     showTilemapWindow = false,
     previewScale = 2.0,
     mapScale = 1.0,
-    lastMouseDown = false,  -- Mouse'un son durumunu izlemek için
-    entities = {} -- Tilemap entity'lerini saklamak için
+    lastMouseDown = false,
+    entities = {},
+    
+    -- Debug mode
+    debug = true,
+    debugText = {},
+    maxDebugMessages = 20
 }
 
-function Tilemap:init()
-    State.showWindows.tilemap = false
-    State.windowSizes.tilemap = {width = 700, height = 700}
-    Console:log("Tilemap module initialized")
+function Tilemap:addDebug(message)
+    if not self.debug then return end
+    
+    Console:log("[TILEMAP DEBUG] " .. message)
+    table.insert(self.debugText, os.date("%H:%M:%S") .. ": " .. message)
+    
+    -- Keep only the last N messages
+    while #self.debugText > self.maxDebugMessages do
+        table.remove(self.debugText, 1)
+    end
 end
 
-function Tilemap:loadTileset(asset, name, tileSize)
-    -- Asset direk verilmiş olabilir veya path olarak gelmiş olabilir
-    local tileset
+function Tilemap:init()
+    self.debug = true  -- Debug modunu aktifleştir
+    State.showWindows.tilemap = false
+    State.windowSizes.tilemap = {width = 800, height = 700}
+    self:addDebug("Tilemap module initialized")
     
-    if type(asset) == "string" then
-        -- Path verilmiş, image yükle
-        tileset = {
-            image = love.graphics.newImage(asset),
-            name = name or asset:match("([^/\\]+)$"):gsub("%.%w+$", ""),
-            tileSize = tileSize or self.tileSize,
-            path = asset
-        }
-    else
-        -- Asset objesi verilmiş
-        tileset = {
-            image = asset.data,
-            name = name or asset.name:gsub("%.%w+$", ""),
-            tileSize = tileSize or self.tileSize,
-            path = asset.path
-        }
+    -- Debug ve hata izleme için ekstra
+    love.window.setMode(love.graphics.getWidth(), love.graphics.getHeight(), {resizable = true})
+end
+
+
+function Tilemap:manualLoadTileset(imagePath, name, tileSize)
+    self:addDebug("Manual tileset loading attempt: " .. imagePath)
+    
+    local image
+    local success, errorMsg = pcall(function()
+        image = love.graphics.newImage(imagePath)
+    end)
+    
+    if not success or not image then
+        self:addDebug("FAILED to load image: " .. tostring(errorMsg))
+        return nil
     end
     
-    tileset.width = tileset.image:getWidth()
-    tileset.height = tileset.image:getHeight()
+    self:addDebug("Successfully loaded image: " .. tostring(image))
+    self:addDebug("Image dimensions: " .. image:getWidth() .. "x" .. image:getHeight())
+    
+    local tileset = {
+        image = image,
+        name = name or imagePath:match("([^/\\]+)$"):gsub("%.%w+$", ""),
+        tileSize = tileSize or self.tileSize,
+        path = imagePath
+    }
+    
+    tileset.width = image:getWidth()
+    tileset.height = image:getHeight()
     tileset.cols = math.floor(tileset.width / tileset.tileSize)
     tileset.rows = math.floor(tileset.height / tileset.tileSize)
     
-    self.tilesets[tileset.name] = tileset
+    self:addDebug("Created tileset: " .. tileset.name)
+    self:addDebug("Dimensions: " .. tileset.width .. "x" .. tileset.height)
+    self:addDebug("Tiles: " .. tileset.cols .. "x" .. tileset.rows .. " at size " .. tileset.tileSize)
     
-    if not self.activeTileset then
-        self.activeTileset = tileset
+    self.tilesets[tileset.name] = tileset
+    self.activeTileset = tileset
+    
+    return tileset
+end
+
+function Tilemap:loadAssetAsTileset(asset)
+    if not asset then
+        self:addDebug("loadAssetAsTileset: asset is nil")
+        return nil
     end
     
-    Console:log("Tileset loaded: " .. tileset.name)
+    self:addDebug("Loading asset as tileset: " .. (asset.name or "unnamed"))
+    
+    if not asset.data then
+        self:addDebug("ERROR: Asset has no data property")
+        -- Asset içeriğini debug için göster
+        for k, v in pairs(asset) do
+            self:addDebug("Asset property: " .. k .. " = " .. tostring(v))
+        end
+        return nil
+    end
+    
+    -- Asset kontrollerini güçlendir
+    local success, imageCheck = pcall(function()
+        return type(asset.data) == "userdata" and asset.data:typeOf("Image")
+    end)
+    
+    if not success or not imageCheck then
+        self:addDebug("ERROR: Asset data is not a valid Love2D image")
+        return nil
+    end
+    
+    -- Tileset oluştur
+    local tileset = {
+        image = asset.data,
+        name = asset.name and asset.name:gsub("%.%w+$", "") or "Unnamed Tileset",
+        tileSize = self.tileSize,
+        path = asset.path or "unknown"
+    }
+    
+    -- Boyutları kontrol et
+    tileset.width = asset.data:getWidth()
+    tileset.height = asset.data:getHeight()
+    if tileset.width <= 0 or tileset.height <= 0 then
+        self:addDebug("ERROR: Image has invalid dimensions: " .. 
+            tileset.width .. "x" .. tileset.height)
+        return nil
+    end
+    
+    -- Grid hesapla
+    tileset.cols = math.floor(tileset.width / tileset.tileSize)
+    tileset.rows = math.floor(tileset.height / tileset.tileSize)
+    if tileset.cols <= 0 or tileset.rows <= 0 then
+        self:addDebug("ERROR: Invalid tile grid: " .. 
+            tileset.cols .. "x" .. tileset.rows)
+        return nil
+    end
+    
+    self:addDebug(string.format("Tileset created: %s (%dx%d, %dx%d tiles at %dpx)", 
+        tileset.name, tileset.width, tileset.height, 
+        tileset.cols, tileset.rows, tileset.tileSize))
+    
+    -- Listeye ekle ve aktifleştir
+    self.tilesets[tileset.name] = tileset
+    self.activeTileset = tileset
+    
     return tileset
 end
 
@@ -72,18 +159,13 @@ function Tilemap:createMap(width, height, name)
         tileSize = self.tileSize
     }
     
-    -- Varsayılan katman oluştur
     self:addLayer(map, "Background")
-    
     self.maps[name] = map
+    self.activeMap = map
     
-    if not self.activeMap then
-        self.activeMap = map
-    end
+    self:addDebug("Created map: " .. name .. " (" .. width .. "x" .. height .. ")")
     
-    Console:log("Map created: " .. name)
-    
-    -- Haritayı otomatik olarak entity olarak ekle
+    -- Create entity
     if SceneManager and SceneManager.createEntity then
         local entity = SceneManager:createEntity(0, 0)
         entity.type = "tilemap"
@@ -94,7 +176,6 @@ function Tilemap:createMap(width, height, name)
         entity.gridSize = self.gridSize
         entity.showGrid = self.showGrid
         
-        -- Tilemap component'i ekle
         entity.components.tilemap = {
             width = width,
             height = height,
@@ -104,12 +185,8 @@ function Tilemap:createMap(width, height, name)
             name = name
         }
         
-        -- Tilemap entity'lerini takip etmek için listeye ekle
         table.insert(self.entities, entity)
-        
-        Console:log("Map added as entity: " .. name)
-    else
-        Console:log("Warning: SceneManager not found, could not add map as entity")
+        self:addDebug("Added map as entity: " .. entity.name)
     end
     
     return map
@@ -122,39 +199,39 @@ function Tilemap:addLayer(map, name)
         visible = true
     }
     
-    -- Boş grid oluştur
+    -- Initialize empty grid
     for y = 1, map.height do
         layer.tiles[y] = {}
         for x = 1, map.width do
-            layer.tiles[y][x] = nil -- nil = boş karo
+            layer.tiles[y][x] = nil
         end
     end
     
     table.insert(map.layers, layer)
+    self:addDebug("Added layer: " .. name .. " to map: " .. map.name)
     return layer
 end
 
 function Tilemap:setTile(map, layer, x, y, tilesetName, tileId)
     if not map or not map.layers[layer] then 
-        Console:log("Error: Invalid map or layer")
+        self:addDebug("ERROR: Invalid map or layer")
         return 
     end
     
     local layerData = map.layers[layer]
     
     if x < 1 or x > map.width or y < 1 or y > map.height then
-        Console:log(string.format("Error: Invalid tile position (%d,%d)", x, y))
+        self:addDebug(string.format("ERROR: Invalid tile position (%d,%d)", x, y))
         return
     end
     
     if not tilesetName or not tileId then
-        Console:log("Error: Invalid tileset or tile ID")
+        self:addDebug("ERROR: Invalid tileset or tile ID")
         return
     end
     
-    -- Tileset'in var olduğundan emin ol
     if not self.tilesets[tilesetName] then
-        Console:log("Error: Tileset not found: " .. tilesetName)
+        self:addDebug("ERROR: Tileset not found: " .. tilesetName)
         return
     end
     
@@ -162,83 +239,220 @@ function Tilemap:setTile(map, layer, x, y, tilesetName, tileId)
         tilesetName = tilesetName,
         tileId = tileId
     }
+    
+    if self.debug then
+        self:addDebug(string.format("Set tile at (%d,%d) to tile ID %d from tileset %s", 
+            x, y, tileId, tilesetName))
+    end
 end
 
 function Tilemap:getTileFromTileset(tileset, tileId)
-    if not tileset then return nil end
+    if not tileset then 
+        self:addDebug("ERROR: Tileset is nil in getTileFromTileset")
+        return nil 
+    end
     
     local col = (tileId - 1) % tileset.cols
     local row = math.floor((tileId - 1) / tileset.cols)
     
+    -- Validate bounds
+    if col < 0 or col >= tileset.cols or row < 0 or row >= tileset.rows then
+        self:addDebug(string.format("ERROR: Invalid tile coordinates (%d,%d) for tileset %s", 
+            col, row, tileset.name))
+        return nil
+    end
+    
+    local quad = love.graphics.newQuad(
+        col * tileset.tileSize, 
+        row * tileset.tileSize, 
+        tileset.tileSize, 
+        tileset.tileSize, 
+        tileset.width, 
+        tileset.height
+    )
+    
     return {
-        quad = love.graphics.newQuad(
-            col * tileset.tileSize, 
-            row * tileset.tileSize, 
-            tileset.tileSize, 
-            tileset.tileSize, 
-            tileset.width, 
-            tileset.height
-        ),
+        quad = quad,
         tileId = tileId,
         col = col,
         row = row
     }
 end
 
-function Tilemap:getTileIdFromPosition(tileset, x, y)
-    if not tileset then return nil end
-    
-    local col = math.floor(x / tileset.tileSize)
-    local row = math.floor(y / tileset.tileSize)
-    
-    if col < 0 or col >= tileset.cols or row < 0 or row >= tileset.rows then
-        return nil
-    end
-    
-    return row * tileset.cols + col + 1
-end
-
-function Tilemap:screenToWorld(screenX, screenY)
-    if Camera and Camera.screenToWorld then
-        return Camera:screenToWorld(screenX, screenY)
-    else
-        local worldX = (screenX - love.graphics.getWidth() / 2) / Camera.scaleX + Camera.x
-        local worldY = (screenY - love.graphics.getHeight() / 2) / Camera.scaleY + Camera.y
-        return worldX, worldY
-    end
-end
-
 function Tilemap:update(dt)
-    -- Sahne üzerine karo yerleştirme
-    if self.selectedTile and self.activeTileset and self.activeMap and 
-       not imgui.GetWantCaptureMouse() and love.mouse.isDown(1) then
-        
-        local mouseX, mouseY = love.mouse.getPosition()
-        local worldX, worldY = self:screenToWorld(mouseX, mouseY)
-        
-        -- Grid pozisyonunu hesapla
-        local gridX = math.floor(worldX / self.gridSize) + 1
-        local gridY = math.floor(worldY / self.gridSize) + 1
-        
-        -- Geçerli grid sınırları içinde olduğundan emin ol
-        if gridX >= 1 and gridX <= self.activeMap.width and
-           gridY >= 1 and gridY <= self.activeMap.height then
-            
-            -- Karo yerleştir
-            self:setTile(
-                self.activeMap, 
-                1, -- Aktif katman (şimdilik sadece ilk katman)
-                gridX, 
-                gridY, 
-                self.activeTileset.name, 
-                self.selectedTile
-            )
+
+    
+
+    if self.mouseClicked then
+        self.selectedTile = hoveredTileId
+       -- self:addDebug(string.format("SELECTED tile %d (col: %d, row: %d)", 
+          --  hoveredTileId, col, row))
+    end
+
+    
+     -- Mouse durumunu güncelle
+     local wasMouseDown = self.lastMouseDown
+     self.lastMouseDown = love.mouse.isDown(1)
+     local mouseClicked = self.lastMouseDown and not wasMouseDown
+     
+     -- Tile yerleştirme
+     if self.selectedTile and self.activeTileset and self.activeMap and 
+        not imgui.GetWantCaptureMouse() and love.mouse.isDown(1) then
+         
+         local mouseX, mouseY = love.mouse.getPosition()
+         local worldX, worldY
+         
+         -- Ekran/dünya koordinat dönüşümü
+         if Camera then
+             worldX = (mouseX - love.graphics.getWidth() / 2) / Camera.scaleX + Camera.x
+             worldY = (mouseY - love.graphics.getHeight() / 2) / Camera.scaleY + Camera.y
+         else
+             worldX = mouseX
+             worldY = mouseY
+         end
+         
+         -- Nil değer kontrolü (string.format hatası buradan gelebilir)
+         if worldX and worldY and self.gridSize and self.gridSize > 0 then
+             -- Grid pozisyonunu hesapla
+             local gridX = math.floor(worldX / self.gridSize) + 1
+             local gridY = math.floor(worldY / self.gridSize) + 1
+             
+             -- Sınır kontrolü
+             if gridX and gridY and
+                gridX >= 1 and gridX <= self.activeMap.width and
+                gridY >= 1 and gridY <= self.activeMap.height then
+                 
+                 -- Karo yerleştir
+                 self:setTile(
+                     self.activeMap, 
+                     1, -- İlk katmana ekle
+                     gridX, 
+                     gridY, 
+                     self.activeTileset.name, 
+                     self.selectedTile
+                 )
+                 
+                 -- Debug
+                 if mouseClicked then
+                     self:addDebug(string.format("Placed tile %d at (%d,%d)", 
+                         self.selectedTile, gridX, gridY))
+                 end
+             end
+         end
+     end
+    
+    -- Remember mouse state for next frame
+    self.lastMouseDown = love.mouse.isDown(1)
+end
+
+function Tilemap:drawDebugPanel()
+    if not self.debug then return end
+    
+    -- Draw debug info in a separate panel
+    imgui.Begin("Tilemap Debug Info")
+    
+    imgui.Text("Active Tileset: " .. (self.activeTileset and self.activeTileset.name or "None"))
+    if self.activeTileset then
+        imgui.Text(string.format("Tileset size: %dx%d", self.activeTileset.width, self.activeTileset.height))
+        imgui.Text(string.format("Tile grid: %dx%d (size: %d)", 
+            self.activeTileset.cols, self.activeTileset.rows, self.activeTileset.tileSize))
+    end
+    
+    imgui.Text("Selected Tile ID: " .. (self.selectedTile or "None"))
+    
+    -- Active map info
+    imgui.Text("Active Map: " .. (self.activeMap and self.activeMap.name or "None"))
+    if self.activeMap then
+        imgui.Text(string.format("Map size: %dx%d", self.activeMap.width, self.activeMap.height))
+        imgui.Text(string.format("Layers: %d", #self.activeMap.layers))
+    end
+    
+    -- Testing buttons
+    if imgui.Button("Test Default Tileset") then
+        self:manualLoadTileset("assets/tilesets/example.png", "Example Tileset", 32)
+    end
+    
+    if imgui.Button("Load From Selected Asset") then
+        if State.selectedAsset then
+            self:addDebug("Attempting to load from selected asset: " .. (State.selectedAsset.name or "unnamed"))
+            self:loadAssetAsTileset(State.selectedAsset)
+        else
+            self:addDebug("No asset currently selected")
         end
     end
+    
+    if State.assets and #State.assets > 0 then
+        if imgui.CollapsingHeader("Available Assets") then
+            for i, asset in ipairs(State.assets) do
+                if asset.type == "image" then
+                    if imgui.Button("Load ##" .. i .. asset.name) then
+                        self:loadAssetAsTileset(asset)
+                    end
+                    imgui.SameLine()
+                    imgui.Text(asset.name .. " (" .. asset.type .. ")")
+                end
+            end
+        end
+    end
+    
+    -- Debug log
+    if imgui.CollapsingHeader("Debug Log") then
+        for i, message in ipairs(self.debugText) do
+            imgui.Text(message)
+        end
+    end
+    
+    imgui.End()
 end
 
 function Tilemap:drawTilemapWindow()
+    -- drawTilemapWindow fonksiyonunun başında debug penceresi ekleyelim
+    if self.debug then
+        imgui.Begin("Tilemap Debug")
+        
+        imgui.Text("Tileset Info:")
+        if self.activeTileset then
+            imgui.Text(string.format("Name: %s", self.activeTileset.name))
+            imgui.Text(string.format("Size: %dx%d", self.activeTileset.width, self.activeTileset.height))
+            imgui.Text(string.format("Tile Grid: %dx%d at %dpx", 
+                self.activeTileset.cols, self.activeTileset.rows, self.activeTileset.tileSize))
+            
+            -- Görüntü kontrolü
+            if imgui.Button("Show Raw Image") then
+                -- Yeni pencerede görüntüyü göster
+                love.graphics.push("all")
+                love.graphics.setColor(1, 1, 1, 1)
+                love.graphics.draw(self.activeTileset.image, 100, 100)
+                love.graphics.pop()
+            end
+        else
+            imgui.Text("No active tileset")
+        end
+        
+        imgui.Separator()
+        
+        -- Mouse bilgileri
+        local mx, my = love.mouse.getPosition()
+        imgui.Text(string.format("Mouse: %d,%d", mx, my))
+        
+        -- Debug log
+        if imgui.CollapsingHeader("Debug Log") then
+            for i, msg in ipairs(self.debugText) do
+                imgui.Text(msg)
+            end
+        end
+        
+        if imgui.Button("Clear Debug") then
+            self.debugText = {}
+        end
+        
+        imgui.End()
+    end
+
     if not State.showWindows.tilemap then return end
+    
+    -- Draw debug panel first
+    self:drawDebugPanel()
     
     self.showTilemapWindow = true
     
@@ -248,15 +462,12 @@ function Tilemap:drawTilemapWindow()
             if imgui.BeginMenuBar() then
                 if imgui.BeginMenu("File") then
                     if imgui.MenuItem("New Map") then
-                        -- Yeni harita oluşturma işlevi
-                        local width = 20
-                        local height = 15
-                        self:createMap(width, height, "New Map")
+                        self:createMap(20, 15, "New Map")
                     end
                     
-                    if imgui.MenuItem("Load Tileset") then
-                        -- Tileset yükleme işlevi burada
-                        Console:log("Please select an image asset from Asset Manager")
+                    if imgui.MenuItem("Show Debug Panel") then
+                        self.debug = not self.debug
+                        self:addDebug("Debug mode: " .. tostring(self.debug))
                     end
                     
                     imgui.EndMenu()
@@ -275,132 +486,134 @@ function Tilemap:drawTilemapWindow()
             end
         end
         
-        -- Sol panel: Tileset seçimi ve önizleme
+        -- Split view: left panel for tileset, right panel for map settings
         imgui.BeginChild("LeftPanel", imgui.GetWindowWidth() * 0.6, 0, true)
         
-        -- Tileset seçimi
-        if self.tilesets and next(self.tilesets) then
-            imgui.Text("Active Tileset:")
-            
-            local tilesetNames = {}
-            local currentTilesetIndex = 1
-            local i = 1
-            
-            for name, _ in pairs(self.tilesets) do
-                tilesetNames[i] = name
-                if self.activeTileset and self.activeTileset.name == name then
-                    currentTilesetIndex = i
-                end
-                i = i + 1
-            end
-            
-            -- ImGui Combo fonksiyonu
-            local comboStr = table.concat(tilesetNames, "\0") .. "\0"
-            local newIndex = imgui.Combo("##TilesetCombo", currentTilesetIndex - 1, comboStr)
-            
-            -- newIndex bir boolean değeri olabilir, bunu indekse çevirmeliyiz
-            if type(newIndex) ~= "boolean" and newIndex ~= (currentTilesetIndex - 1) then
-                self.activeTileset = self.tilesets[tilesetNames[newIndex + 1]]
-            end
-        else
-            if imgui.Button("Load Tileset") then
-                -- Örnek: Bir asset seçilmişse tileset olarak yükle
-                if State.selectedAsset and State.selectedAsset.type == "image" then
-                    self:loadTileset(State.selectedAsset)
-                else
-                    Console:log("Please select an image asset first!")
-                end
-            end
+        -- Load tileset section
+        imgui.Text("Tileset")
+        imgui.Separator()
+        
+        -- Direct load from State.assets
+        if imgui.Button("Load From Assets") then
+            imgui.OpenPopup("DirectAssetLoadPopup")
         end
         
-        -- Tileset önizleme
-        if self.activeTileset then
+        -- Asset loading popup
+        if imgui.BeginPopup("DirectAssetLoadPopup") then
+            imgui.Text("Select an image:")
             imgui.Separator()
-            imgui.Text("Tileset Preview:")
             
-            -- Dinamik tile boyutu ayarı
-            local newTileSize = imgui.SliderInt("Tile Size", self.activeTileset.tileSize, 8, 128)
-            if newTileSize ~= self.activeTileset.tileSize then
-                -- Tileset'in tile boyutunu güncelle
-                self.activeTileset.tileSize = newTileSize
-                self.activeTileset.cols = math.floor(self.activeTileset.width / self.activeTileset.tileSize)
-                self.activeTileset.rows = math.floor(self.activeTileset.height / self.activeTileset.tileSize)
-                Console:log("Updated tileset tile size to: " .. newTileSize)
+            -- Check how many assets are available
+            local assetCount = 0
+            if State.assets then 
+                assetCount = #State.assets
+                self:addDebug("Assets to choose from: " .. assetCount)
+            else
+                self:addDebug("State.assets is nil")
             end
             
-            -- Önizleme boyutu ayarı
+            if assetCount > 0 then
+                for i, asset in ipairs(State.assets) do
+                    if asset.type == "image" then
+                        local assetName = asset.name or ("Asset " .. i)
+                        self:addDebug("Listing asset: " .. assetName)
+                        
+                        if imgui.Selectable(assetName) then
+                            self:addDebug("Selected asset: " .. assetName)
+                            self:loadAssetAsTileset(asset)
+                            imgui.CloseCurrentPopup()
+                        end
+                    end
+                end
+            else
+                imgui.Text("No image assets found")
+            end
+            
+            imgui.EndPopup()
+        end
+        
+        -- Tileset preview
+        if self.activeTileset then
+            imgui.Text("Current Tileset: " .. self.activeTileset.name)
+            
+            local newTileSize = imgui.SliderInt("Tile Size", self.activeTileset.tileSize, 8, 128)
+            if newTileSize ~= self.activeTileset.tileSize then
+                self.activeTileset.tileSize = newTileSize
+                self.activeTileset.cols = math.floor(self.activeTileset.width / newTileSize)
+                self.activeTileset.rows = math.floor(self.activeTileset.height / newTileSize)
+                self:addDebug("Updated tile size to: " .. newTileSize)
+            end
+            
             local newPreviewScale = imgui.SliderFloat("Preview Scale", self.previewScale, 0.5, 4.0)
             if newPreviewScale ~= self.previewScale then
                 self.previewScale = newPreviewScale
             end
             
-            -- Tileset bilgileri
-            imgui.Text(string.format("Size: %dx%d, Tiles: %dx%d", 
-                self.activeTileset.width, 
-                self.activeTileset.height,
-                self.activeTileset.cols,
-                self.activeTileset.rows
-            ))
+            -- Tileset details
+            imgui.Text(string.format("Tileset size: %dx%d pixels", 
+                self.activeTileset.width, self.activeTileset.height))
+            imgui.Text(string.format("Tile grid: %dx%d (%d tiles)", 
+                self.activeTileset.cols, self.activeTileset.rows,
+                self.activeTileset.cols * self.activeTileset.rows))
             
-            -- Seçilen karo bilgisi
+            -- Selected tile info
             if self.selectedTile then
                 local tile = self:getTileFromTileset(self.activeTileset, self.selectedTile)
                 if tile then
-                    imgui.Text(string.format("Selected Tile: %d (Column: %d, Row: %d)", 
+                    imgui.Text(string.format("Selected: Tile %d (Col: %d, Row: %d)", 
                         self.selectedTile, tile.col + 1, tile.row + 1))
                 else
-                    imgui.Text("Selected Tile: " .. self.selectedTile)
+                    imgui.Text("Selected: Tile " .. self.selectedTile .. " (invalid)")
                 end
             else
                 imgui.Text("No tile selected")
             end
             
-            -- Tileset Grid önizleme alanı
-            local imageWidth = self.activeTileset.width * self.previewScale
-            local imageHeight = self.activeTileset.height * self.previewScale
-            
-            local availWidth = imgui.GetWindowWidth() - 20
-            local availHeight = imgui.GetWindowHeight() - 180
-            
-            local previewWidth = math.min(imageWidth, availWidth)
-            local previewHeight = math.min(imageHeight, availHeight)
+            -- Tileset preview
+            local previewWidth = math.min(
+                self.activeTileset.width * self.previewScale,
+                imgui.GetWindowWidth() - 20
+            )
+            local previewHeight = math.min(
+                self.activeTileset.height * self.previewScale,
+                imgui.GetWindowHeight() - 200
+            )
             
             imgui.BeginChild("TilesetPreview", previewWidth, previewHeight, true)
             
-            -- ImGui penceresinin pozisyonunu al
-            local wx, wy = 0, 0
+            -- Get cursor position for drawing
             local cx, cy = 0, 0
-            
-            if imgui.GetWindowPos then
-                wx, wy = imgui.GetWindowPos()
-            end
-            
             if imgui.GetCursorScreenPos then
                 cx, cy = imgui.GetCursorScreenPos()
+            else
+                -- Fallback olarak window pozisyonunu kullan
+                local wx, wy = 0, 0
+                if imgui.GetWindowPos then
+                    wx, wy = imgui.GetWindowPos()
+                end
+                cx = wx + 10  -- Window içinde margin ekle
+                cy = wy + 50  -- Window içinde margin ekle
             end
             
-            local mouseX, mouseY = love.mouse.getPosition()
-            
-            -- Sprite sheet'i çiz
-            love.graphics.push("all")
-            
-            -- Sprite sheet'i çiz
+            -- ImGui ve Love arasındaki koordinat çevirisi için daha net olalım
+            love.graphics.push()
+            love.graphics.translate(cx, cy)
+            -- Tileset çizimi
             love.graphics.setColor(1, 1, 1, 1)
             self.activeTileset.image:setFilter("nearest", "nearest")
             love.graphics.draw(
                 self.activeTileset.image, 
-                cx, 
-                cy, 
+                0, 0, 
                 0, 
                 self.previewScale, 
                 self.previewScale
             )
             
-            -- Grid çizgileri
+            -- Draw grid
             love.graphics.setColor(1, 1, 0, 0.5)
             love.graphics.setLineWidth(1)
             
-            -- Dikey çizgiler
+            -- Vertical lines
             for x = 0, self.activeTileset.cols do
                 love.graphics.line(
                     cx + x * self.activeTileset.tileSize * self.previewScale,
@@ -410,7 +623,7 @@ function Tilemap:drawTilemapWindow()
                 )
             end
             
-            -- Yatay çizgiler
+            -- Horizontal lines
             for y = 0, self.activeTileset.rows do
                 love.graphics.line(
                     cx,
@@ -420,19 +633,43 @@ function Tilemap:drawTilemapWindow()
                 )
             end
             
-            -- Fare pozisyonunu hesapla ve seçilen tile'ı vurgula
+            -- Handle mouse interaction
+            local mouseX, mouseY = love.mouse.getPosition()
+            local windowX, windowY = 0, 0
+            if imgui.GetWindowPos then
+                windowX, windowY = imgui.GetWindowPos()
+            end
+
             local tilesetX = (mouseX - cx) / self.previewScale
             local tilesetY = (mouseY - cy) / self.previewScale
+
+            -- Debug bilgileri
+            self:addDebug(string.format("Mouse: %d,%d, Tileset offset: %d,%d", 
+            mouseX, mouseY, cx, cy))
+            self:addDebug(string.format("Relative: %d,%d", tilesetX, tilesetY))
+
             
-            -- Fare tileset üzerinde mi kontrol et
+            -- Check if mouse is over the tileset
             if tilesetX >= 0 and tilesetX < self.activeTileset.width and
                tilesetY >= 0 and tilesetY < self.activeTileset.height then
                 
-                -- Üzerinde gezinilen karoyu hesapla
+                -- Calculate tile coordinates
                 local col = math.floor(tilesetX / self.activeTileset.tileSize)
                 local row = math.floor(tilesetY / self.activeTileset.tileSize)
                 
-                -- Gezinilen karoyu vurgula
+                 -- Geçerli sınırlar içinde mi kontrol et
+                if col >= 0 and col < self.activeTileset.cols and
+                row >= 0 and row < self.activeTileset.rows then
+                
+                    -- Hover bilgisi ve vurgu
+                    local hoveredTileId = row * self.activeTileset.cols + col + 1
+                    
+                    -- Debug için hover bilgisini göster
+                    self:addDebug(string.format("Hovering tile: %d (col: %d, row: %d)", 
+                        hoveredTileId, col, row))
+                end   
+                    
+                -- Highlight hovered tile
                 love.graphics.setColor(1, 1, 0, 0.3)
                 love.graphics.rectangle(
                     "fill",
@@ -442,18 +679,27 @@ function Tilemap:drawTilemapWindow()
                     self.activeTileset.tileSize * self.previewScale
                 )
                 
-                -- Tile ID'sini hesapla
+                -- Calculate tile ID
                 local hoveredTileId = row * self.activeTileset.cols + col + 1
                 
-                -- Fare tıklaması ile karo seç
+                -- Select tile on click
                 if love.mouse.isDown(1) and not self.lastMouseDown then
                     self.selectedTile = hoveredTileId
-                    Console:log("Selected tile: " .. self.selectedTile)
+                    self:addDebug(string.format("Selected tile %d (col: %d, row: %d)", 
+                        hoveredTileId, col, row))
                     self.lastMouseDown = true
                 end
+                
+                -- Show hover info
+                love.graphics.setColor(1, 1, 1, 1)
+                love.graphics.print(
+                    string.format("Tile: %d (%d,%d)", hoveredTileId, col, row),
+                    cx + 5,
+                    cy + self.activeTileset.height * self.previewScale - 20
+                )
             end
             
-            -- Seçili tile'ı vurgula
+            -- Highlight selected tile if any
             if self.selectedTile then
                 local tile = self:getTileFromTileset(self.activeTileset, self.selectedTile)
                 if tile then
@@ -466,7 +712,7 @@ function Tilemap:drawTilemapWindow()
                         self.activeTileset.tileSize * self.previewScale
                     )
                     
-                    -- Seçili tile'ın kenarını daha belirgin göster
+                    -- Add border to selected tile
                     love.graphics.setColor(0, 1, 0, 1)
                     love.graphics.setLineWidth(2)
                     love.graphics.rectangle(
@@ -476,27 +722,63 @@ function Tilemap:drawTilemapWindow()
                         self.activeTileset.tileSize * self.previewScale,
                         self.activeTileset.tileSize * self.previewScale
                     )
+                    
+                    -- Show selection info
+                    love.graphics.setColor(0, 0, 0, 0.7)
+                    love.graphics.rectangle(
+                        "fill",
+                        cx + 5,
+                        cy + 5,
+                        200,
+                        25
+                    )
+                    love.graphics.setColor(0, 1, 0, 1)
+                    love.graphics.print(
+                        string.format("Selected: Tile %d (%d,%d)", 
+                            self.selectedTile, tile.col, tile.row),
+                        cx + 10,
+                        cy + 10
+                    )
                 end
             end
             
             love.graphics.pop()
             
-            -- Mouse durumunu güncelle
-            if not love.mouse.isDown(1) then
-                self.lastMouseDown = false
-            end
-            
             imgui.EndChild()
+        else
+            imgui.Text("No tileset loaded")
+            
+            -- Display direct asset loading options
+            if State.assets and #State.assets > 0 then
+                imgui.Text("Available image assets:")
+                
+                for i, asset in ipairs(State.assets) do
+                    if asset.type == "image" then
+                        if imgui.Button("Load " .. asset.name) then
+                            self:loadAssetAsTileset(asset)
+                        end
+                    end
+                end
+            else
+                imgui.Text("No image assets available. Import some first.")
+            end
         end
         
         imgui.EndChild()
         
-        -- Sağ panel: Harita ayarları
+        -- Right panel: Map settings
         imgui.SameLine()
         imgui.BeginChild("RightPanel", 0, 0, true)
         
-        imgui.Text("Map Settings:")
+        imgui.Text("Map Settings")
+        imgui.Separator()
         
+        -- Create new map button
+        if imgui.Button("New Map") then
+            self:createMap(20, 15, "New Map")
+        end
+        
+        -- Map selection if multiple maps exist
         if self.maps and next(self.maps) then
             local mapNames = {}
             local currentMapIndex = 1
@@ -515,35 +797,106 @@ function Tilemap:drawTilemapWindow()
             
             if type(newIndex) ~= "boolean" and newIndex ~= (currentMapIndex - 1) then
                 self.activeMap = self.maps[mapNames[newIndex + 1]]
-            end
-        else
-            if imgui.Button("New Map") then
-                self:createMap(20, 15, "New Map")
+                self:addDebug("Selected map: " .. mapNames[newIndex + 1])
             end
         end
         
+        -- Map properties if a map is active
         if self.activeMap then
-            imgui.Text(string.format("Size: %dx%d", self.activeMap.width, self.activeMap.height))
+            -- Current map info
+            imgui.Text(string.format("Current map: %s (%dx%d)", 
+                self.activeMap.name, self.activeMap.width, self.activeMap.height))
             
-            -- Map boyutları
-            local newWidth = imgui.InputInt("Width##Map", self.activeMap.width)
-            if newWidth ~= self.activeMap.width and newWidth > 0 then
-                -- TODO: Harita boyutunu değiştir
-                Console:log("Map width resizing not implemented yet")
+            -- Map dimensions
+            imgui.PushItemWidth(80)
+            
+            local width = imgui.InputInt("Width##Map", self.activeMap.width)
+            if width ~= self.activeMap.width and width > 0 then
+                -- Store original dimensions
+                local oldWidth = self.activeMap.width
+                
+                -- Update map width
+                self.activeMap.width = width
+                self:addDebug("Changed map width to: " .. width)
+                
+                -- Update entity if exists
+                for _, entity in ipairs(self.entities) do
+                    if entity.mapName == self.activeMap.name then
+                        entity.width = width * self.activeMap.tileSize
+                        if entity.components and entity.components.tilemap then
+                            entity.components.tilemap.width = width
+                        end
+                    end
+                end
+                
+                -- Resize all layers
+                for _, layer in ipairs(self.activeMap.layers) do
+                    -- For each row
+                    for y = 1, self.activeMap.height do
+                        -- Create row if it doesn't exist
+                        if not layer.tiles[y] then
+                            layer.tiles[y] = {}
+                        end
+                        
+                        -- If expanding, initialize new cells
+                        if width > oldWidth then
+                            for x = oldWidth + 1, width do
+                                layer.tiles[y][x] = nil
+                            end
+                        end
+                    end
+                end
             end
             
-            local newHeight = imgui.InputInt("Height##Map", self.activeMap.height)
-            if newHeight ~= self.activeMap.height and newHeight > 0 then
-                -- TODO: Harita boyutunu değiştir
-                Console:log("Map height resizing not implemented yet")
+            imgui.SameLine()
+            
+            local height = imgui.InputInt("Height##Map", self.activeMap.height)
+            if height ~= self.activeMap.height and height > 0 then
+                -- Store original dimensions
+                local oldHeight = self.activeMap.height
+                
+                -- Update map height
+                self.activeMap.height = height
+                self:addDebug("Changed map height to: " .. height)
+                
+                -- Update entity if exists
+                for _, entity in ipairs(self.entities) do
+                    if entity.mapName == self.activeMap.name then
+                        entity.height = height * self.activeMap.tileSize
+                        if entity.components and entity.components.tilemap then
+                            entity.components.tilemap.height = height
+                        end
+                    end
+                end
+                
+                -- Resize all layers
+                for _, layer in ipairs(self.activeMap.layers) do
+                    -- If expanding, create new rows
+                    if height > oldHeight then
+                        for y = oldHeight + 1, height do
+                            layer.tiles[y] = {}
+                            for x = 1, self.activeMap.width do
+                                layer.tiles[y][x] = nil
+                            end
+                        end
+                    -- If shrinking, remove rows
+                    elseif height < oldHeight then
+                        for y = height + 1, oldHeight do
+                            layer.tiles[y] = nil
+                        end
+                    end
+                end
             end
             
-            -- Grid boyutu
-            local newGridSize = imgui.SliderInt("Grid Size##GridSize", self.gridSize, 16, 64)
+            imgui.PopItemWidth()
+            
+            -- Grid size slider
+            local newGridSize = imgui.SliderInt("Grid Size", self.gridSize, 16, 64)
             if newGridSize ~= self.gridSize then
                 self.gridSize = newGridSize
+                self:addDebug("Changed grid size to: " .. newGridSize)
                 
-                -- Tüm tilemap entity'lerinin grid boyutunu güncelle
+                -- Update entities
                 for _, entity in ipairs(self.entities) do
                     if entity.type == "tilemap" then
                         entity.gridSize = self.gridSize
@@ -551,12 +904,13 @@ function Tilemap:drawTilemapWindow()
                 end
             end
             
-            -- Grid gösterme seçeneği
+            -- Show grid checkbox
             local showGridChanged = imgui.Checkbox("Show Grid", self.showGrid)
             if showGridChanged ~= self.showGrid then
                 self.showGrid = showGridChanged
+                self:addDebug("Show grid: " .. tostring(self.showGrid))
                 
-                -- Tüm tilemap entity'lerinin grid görünürlüğünü güncelle
+                -- Update entities
                 for _, entity in ipairs(self.entities) do
                     if entity.type == "tilemap" then
                         entity.showGrid = self.showGrid
@@ -566,41 +920,40 @@ function Tilemap:drawTilemapWindow()
             
             imgui.Separator()
             
-            -- Harita katmanları
+            -- Layer management
             imgui.Text("Layers:")
             
             for i, layer in ipairs(self.activeMap.layers) do
                 if imgui.CollapsingHeader(layer.name .. "##Layer" .. i) then
-                    -- Katman adı
+                    -- Layer name input
                     local layerName = imgui.InputText("Name##Layer" .. i, layer.name, 100)
                     if layerName ~= layer.name then
                         layer.name = layerName
+                        self:addDebug("Renamed layer to: " .. layerName)
                     end
                     
-                    -- Katman görünürlüğü
+                    -- Layer visibility toggle
                     local visible = imgui.Checkbox("Visible##Layer" .. i, layer.visible)
                     if visible ~= layer.visible then
                         layer.visible = visible
+                        self:addDebug("Layer visibility: " .. tostring(visible))
                     end
                     
-                    -- Katmanı temizle
+                    -- Clear layer button
                     if imgui.Button("Clear Layer##" .. i) then
                         for y = 1, self.activeMap.height do
                             for x = 1, self.activeMap.width do
                                 layer.tiles[y][x] = nil
                             end
                         end
-                        Console:log("Cleared layer: " .. layer.name)
+                        self:addDebug("Cleared layer: " .. layer.name)
                     end
                 end
             end
             
-            imgui.Separator()
-            
-            -- Yeni katman ekle
+            -- Add new layer button
             if imgui.Button("Add Layer") then
                 self:addLayer(self.activeMap, "New Layer")
-                Console:log("Added new layer to map: " .. self.activeMap.name)
             end
         end
         
@@ -612,126 +965,134 @@ end
 
 function Tilemap:drawMap(map, gridSize, showGrid)
     if not map then return end
-    
-    -- Varsayılan değerleri kullan eğer parametre verilmemişse
+
     gridSize = gridSize or self.gridSize
     if showGrid == nil then showGrid = self.showGrid end
-    
-    -- Her katmanı çiz
+
+    -- Draw each layer
     for layerIndex, layer in ipairs(map.layers) do
-        if layer.visible then
-            for y = 1, map.height do
-                for x = 1, map.width do
-                    local tile = layer.tiles[y][x]
-                    if tile then
-                        local tileset = self.tilesets[tile.tilesetName]
-                        if tileset then
-                            local tileData = self:getTileFromTileset(tileset, tile.tileId)
-                            if tileData then
-                                love.graphics.setColor(1, 1, 1, 1) -- Tam opaklık ile çiz
-                                love.graphics.draw(
-                                    tileset.image,
-                                    tileData.quad,
-                                    (x - 1) * gridSize,
-                                    (y - 1) * gridSize,
-                                    0,
-                                    gridSize / tileset.tileSize,
-                                    gridSize / tileset.tileSize
-                                )
-                            end
+    if layer.visible then
+        for y = 1, map.height do
+            for x = 1, map.width do
+                local tile = layer.tiles[y][x]
+                if tile then
+                    local tileset = self.tilesets[tile.tilesetName]
+                    if tileset then
+                        local tileData = self:getTileFromTileset(tileset, tile.tileId)
+                        if tileData then
+                            love.graphics.setColor(1, 1, 1, 1)
+                            love.graphics.draw(
+                                tileset.image,
+                                tileData.quad,
+                                (x - 1) * gridSize,
+                                (y - 1) * gridSize,
+                                0,
+                                gridSize / tileset.tileSize,
+                                gridSize / tileset.tileSize
+                            )
                         end
                     end
                 end
             end
         end
     end
-    
-    -- Grid çizgileri
+    end
+
+    -- Draw grid
     if showGrid then
-        love.graphics.setColor(0.5, 0.5, 0.5, 0.5)
-        love.graphics.setLineWidth(1)
-        
-        -- Yatay çizgiler
-        for y = 0, map.height do
-            love.graphics.line(
-                0, 
-                y * gridSize, 
-                map.width * gridSize, 
-                y * gridSize
-            )
-        end
-        
-        -- Dikey çizgiler
-        for x = 0, map.width do
-            love.graphics.line(
-                x * gridSize, 
-                0, 
-                x * gridSize, 
-                map.height * gridSize
-            )
-        end
-        
-        love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setColor(0.5, 0.5, 0.5, 0.5)
+    love.graphics.setLineWidth(1)
+
+    -- Horizontal lines
+    for y = 0, map.height do
+        love.graphics.line(
+            0, 
+            y * gridSize, 
+            map.width * gridSize, 
+            y * gridSize
+        )
+    end
+
+    -- Vertical lines
+    for x = 0, map.width do
+        love.graphics.line(
+            x * gridSize, 
+            0, 
+            x * gridSize, 
+            map.height * gridSize
+        )
+    end
+
+    love.graphics.setColor(1, 1, 1, 1)
     end
 end
 
 function Tilemap:drawEntity(entity)
     if not entity or not entity.mapName then return end
-    
+
     local map = self.maps[entity.mapName]
     if not map then return end
-    
+
     love.graphics.push()
-    
-    -- Koordinatları sayısal değerlere dönüştür
+
+    -- Convert coordinates to numbers
     local x = tonumber(entity.x) or 0
     local y = tonumber(entity.y) or 0
     local rotation = tonumber(entity.rotation) or 0
     local scaleX = tonumber(entity.scaleX) or 1
     local scaleY = tonumber(entity.scaleY) or 1
-    
+
     love.graphics.translate(x, y)
     love.graphics.rotate(rotation)
     love.graphics.scale(scaleX, scaleY)
-    
-    -- Görünürlük kontrolü
+
+    -- Check visibility
     if entity.visible == false then 
         love.graphics.pop()
-        return 
+    return 
     end
-    
-    -- Haritayı çiz
+
+    -- Draw the map
     self:drawMap(map, entity.gridSize or self.gridSize, entity.showGrid)
-    
+
     love.graphics.pop()
 end
 
 function Tilemap:drawInScene()
-    -- Aktif haritayı çiz (editör görünümü)
+    -- Draw active map (editor view)
     if self.activeMap then
-        self:drawMap(self.activeMap, self.gridSize, self.showGrid)
+    self:drawMap(self.activeMap, self.gridSize, self.showGrid)
     end
-    
-    -- Tüm tilemap entity'lerini çiz
+
+    -- Draw all tilemap entities
     for _, entity in ipairs(SceneManager.entities or {}) do
-        if entity.type == "tilemap" then
+        if entity.type == "tilemap" or (entity.components and entity.components.tilemap) then
             self:drawEntity(entity)
         end
     end
-    
-    -- Fare pozisyonunda seçilen karoyu göster (yerleştirme önizlemesi)
+
+    -- Draw hover preview of selected tile
     if self.selectedTile and self.activeTileset and not imgui.GetWantCaptureMouse() then
         local mouseX, mouseY = love.mouse.getPosition()
-        local worldX, worldY = self:screenToWorld(mouseX, mouseY)
-        
-        -- Grid pozisyonunu hesapla
+        local worldX, worldY
+
+        -- Convert screen coords to world coords
+        if Camera then
+            worldX = (mouseX - love.graphics.getWidth() / 2) / Camera.scaleX + Camera.x
+            worldY = (mouseY - love.graphics.getHeight() / 2) / Camera.scaleY + Camera.y
+        else
+            worldX = mouseX
+            worldY = mouseY
+        end
+
+        -- Calculate grid position
         local gridX = math.floor(worldX / self.gridSize)
         local gridY = math.floor(worldY / self.gridSize)
-        
-        -- Seçilen karoyu çiz
+
+        -- Draw tile preview
         local tileData = self:getTileFromTileset(self.activeTileset, self.selectedTile)
         if tileData then
-            love.graphics.setColor(1, 1, 1, 0.7) -- Yarı saydam
+            love.graphics.setColor(1, 1, 1, 0.7) -- Semi-transparent
             love.graphics.draw(
                 self.activeTileset.image,
                 tileData.quad,
@@ -742,7 +1103,7 @@ function Tilemap:drawInScene()
                 self.gridSize / self.activeTileset.tileSize
             )
             
-            -- Grid vurgusu
+            -- Highlight grid cell
             love.graphics.setColor(1, 1, 0, 0.5)
             love.graphics.rectangle(
                 "line",
@@ -755,6 +1116,7 @@ function Tilemap:drawInScene()
         end
     end
 end
+
 
 function Tilemap:draw()
     self:drawTilemapWindow()

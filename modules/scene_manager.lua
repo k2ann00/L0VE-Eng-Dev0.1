@@ -92,6 +92,9 @@ end
 
 function SceneManager:drawEntities()
     for _, entity in ipairs(self.entities) do
+        -- Sadece tilemap componentine sahip entity'ler için placeholder çizme
+        local hasTilemap = entity.type == "tilemap" or (entity.components and entity.components.tilemap)
+        
         -- Sprite veya Animator component'i varsa
         if entity.components then
             if entity.components.animator and entity.components.animator.currentAnimation then
@@ -146,13 +149,15 @@ function SceneManager:drawEntities()
                     w/2, h/2
                 )
             else
-                -- Placeholder çiz
-                love.graphics.setColor(0.5, 0.5, 0.5, 1)
-                love.graphics.rectangle("fill", entity.x, entity.y, entity.width, entity.height)
-                love.graphics.setColor(0.8, 0.8, 0.8, 1)
-                love.graphics.rectangle("line", entity.x, entity.y, entity.width, entity.height)
-                love.graphics.setColor(1, 1, 1, 1)
-                love.graphics.print(entity.name or "Entity", entity.x + 2, entity.y + 2)
+                -- Placeholder çiz (SADECE tilemap component'i YOKSA)
+                if not hasTilemap then
+                    love.graphics.setColor(0.5, 0.5, 0.5, 1)
+                    love.graphics.rectangle("fill", entity.x, entity.y, entity.width, entity.height)
+                    love.graphics.setColor(0.8, 0.8, 0.8, 1)
+                    love.graphics.rectangle("line", entity.x, entity.y, entity.width, entity.height)
+                    love.graphics.setColor(1, 1, 1, 1)
+                    love.graphics.print(entity.name or "Entity", entity.x + 2, entity.y + 2)
+                end
             end
             
             -- Seçili entity'nin etrafına çizgi çiz

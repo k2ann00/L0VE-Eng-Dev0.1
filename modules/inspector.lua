@@ -593,8 +593,27 @@ function Inspector:drawTilemapComponent(entity)
             entity.width = entity.components.tilemap.width * entity.components.tilemap.tileSize
             entity.height = entity.components.tilemap.height * entity.components.tilemap.tileSize
             
+            -- Mark this entity as a tilemap type
+            entity.type = "tilemap"
+            
             -- Open tilemap editor window
             State.showWindows.tilemap = true
+            
+            -- Try to load a tileset if there is a selected asset
+            if State.selectedAsset and State.selectedAsset.type == "image" then
+                -- Load the tileset using the asset
+                local tileset = engine.tilemap:loadTileset(State.selectedAsset)
+                if tileset then
+                    entity.components.tilemap.tileset = tileset
+                    Console:log("Loaded tileset from selected asset: " .. State.selectedAsset.name)
+                else
+                    Console:log("Could not load tileset from selected asset", "warning")
+                    -- Open a popup to select a tileset
+                    imgui.OpenPopup("SelectTilesetForNewTilemap")
+                end
+             else 
+                Console:log("No image asset selected. Please load a tileset from the Tilemap Editor.")
+             end
             
             Console:log("Added tilemap component to: " .. (entity.name or "unnamed"))
         end
@@ -607,28 +626,73 @@ function Inspector:drawTilemapComponent(entity)
             imgui.Text("Tileset: " .. entity.components.tilemap.tileset.name)
         else
             imgui.Text("Tileset: None")
+            
+            if imgui.Button("Load Tileset") then
+                -- Open tilemap editor to select a tileset
+                State.showWindows.tilemap = true
+                Console:log("Please select a tileset in the Tilemap Editor")
+            end
         end
         
         -- Map dimensions
+        imgui.PushItemWidth(60)
         local width = imgui.InputInt("Width##Tilemap", entity.components.tilemap.width)
-        if width ~= entity.components.tilemap.width then
-            -- TODO: Handle map resizing
+        if width ~= entity.components.tilemap.width and width > 0 then
+            -- Handle map resizing
             entity.components.tilemap.width = width
             entity.width = width * entity.components.tilemap.tileSize
+            
+            -- Resize all layers
+            for _, layer in ipairs(entity.components.tilemap.layers) do
+                for y = 1, entity.components.tilemap.height do
+                    if not layer.tiles[y] then layer.tiles[y] = {} end
+                    -- Ensure width is correct
+                    for x = 1, width do
+                        if x > #layer.tiles[y] then
+                            layer.tiles[y][x] = nil
+                        end
+                    end
+                end
+            end
+            
+            Console:log("Resized tilemap width to: " .. width)
         end
+        
+        imgui.SameLine()
         
         local height = imgui.InputInt("Height##Tilemap", entity.components.tilemap.height)
-        if height ~= entity.components.tilemap.height then
-            -- TODO: Handle map resizing
+        if height ~= entity.components.tilemap.height and height > 0 then
+            -- Handle map resizing
             entity.components.tilemap.height = height
             entity.height = height * entity.components.tilemap.tileSize
+            
+            -- Resize all layers
+            for _, layer in ipairs(entity.components.tilemap.layers) do
+                -- Add or remove rows as needed
+                for y = 1, height do
+                    if not layer.tiles[y] then
+                        layer.tiles[y] = {}
+                        for x = 1, entity.components.tilemap.width do
+                            layer.tiles[y][x] = nil
+                        end
+                    end
+                end
+                -- Remove excess rows
+                for y = height + 1, #layer.tiles do
+                    layer.tiles[y] = nil
+                end
+            end
+            
+            Console:log("Resized tilemap height to: " .. height)
         end
+        imgui.PopItemWidth()
         
         local tileSize = imgui.InputInt("Tile Size##Tilemap", entity.components.tilemap.tileSize)
-        if tileSize ~= entity.components.tilemap.tileSize then
+        if tileSize ~= entity.components.tilemap.tileSize and tileSize > 0 then
             entity.components.tilemap.tileSize = tileSize
             entity.width = entity.components.tilemap.width * tileSize
             entity.height = entity.components.tilemap.height * tileSize
+            Console:log("Changed tilemap tile size to: " .. tileSize)
         end
         
         -- Open editor button
@@ -639,6 +703,7 @@ function Inspector:drawTilemapComponent(entity)
         -- Remove component button
         if imgui.Button("Remove Tilemap Component") then
             entity.components.tilemap = nil
+            entity.type = nil  -- Remove tilemap type
             Console:log("Removed tilemap component from: " .. (entity.name or "unnamed"))
         end
     end
